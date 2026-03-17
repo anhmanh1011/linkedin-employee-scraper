@@ -74,16 +74,19 @@ RECEIVER_PORT=8080
 1. Load `.env` config.
 2. Read `state.json` to get previously sent domains (for resume).
 3. Read `input.txt` line by line using `bufio.Scanner`.
-4. For each line, parse `domain|company`. Skip if domain already in state.
+4. For each line, parse `domain|company`:
+   - Skip empty lines and lines without `|` delimiter.
+   - Trim whitespace from domain and company name.
+   - Skip if domain already in state (resume support).
 5. Accumulate into batch buffer (max 100 tasks per batch).
 6. When batch is full, send via goroutine (max 30 concurrent goroutines using semaphore).
 7. Each DataForSEO task_post request contains:
    - `keyword`: `site:linkedin.com/in "Company Name"`
-   - `depth`: 700
+   - `depth`: 700 (number of search results to retrieve per keyword, max supported by DataForSEO)
    - `postback_url`: receiver URL
    - `tag`: domain (so receiver can map results back)
-8. On successful batch send, update `state.json` with sent domains.
-9. On failure, retry up to 3 times with exponential backoff. If still fails, log error and continue.
+8. On successful batch send, update `state.json` via a dedicated state-writer channel (single goroutine writes state, same pattern as receiver's file writer — avoids concurrent write corruption from multiple goroutines).
+9. On failure, retry up to 3 times with exponential backoff (base delay 1s, max delay 8s). 3 retries = 4 total attempts. If still fails, log error and continue with next batch.
 10. After all batches sent, print summary.
 
 ### DataForSEO API Limits
@@ -106,7 +109,7 @@ RECEIVER_PORT=8080
 
 1. Decode JSON body (support gzip Content-Encoding).
 2. Validate top-level `status_code == 20000`. If not, log warning and return OK.
-3. For each task in payload:
+3. For each task in payload, check task-level `status_code == 20000` (DataForSEO can return per-task errors within a successful batch). Skip tasks with errors and log them.
    - Get `domain` from task's `tag` field.
    - Iterate through `result[].items[]`.
    - For each item where URL contains `linkedin.com/in/`:
@@ -128,7 +131,9 @@ Handler 3 ──┘
 
 - Only 1 goroutine writes to file — no locks needed.
 - Calls `file.Sync()` after each write to flush to disk.
-- On graceful shutdown: close channel, writer drains remaining data, closes file.
+- On graceful shutdown (SIGINT/SIGTERM via `os/signal`): stop accepting new requests, close channel, writer drains remaining data, closes file.
+- If channel is full (backpressure), handler logs warning and drops the result to avoid blocking HTTP response.
+- Output file opened in **append mode** to support restart/resume.
 
 ### Name Extraction Logic
 
@@ -160,7 +165,9 @@ If title has no ` - `, use the entire title as the name.
 }
 ```
 
-Sender writes to this file after each successful batch. Receiver uses `tag` field from postback, so it does not need to read state.
+Sender writes to this file via a dedicated state-writer goroutine (channel-based, same as receiver pattern) to avoid concurrent write corruption. Receiver uses `tag` field from postback, so it does not need to read state.
+
+Note: `task_ids` are stored for debugging/reconciliation purposes (e.g., checking which tasks never received a postback).
 
 ## Error Handling
 
@@ -171,6 +178,10 @@ Sender writes to this file after each successful batch. Receiver uses `tag` fiel
 | Postback body invalid JSON | Return HTTP 400, log error |
 | Title has no ` - ` separator | Use entire title as name |
 | Title empty or URL not linkedin.com/in | Skip that item |
+| Per-task status_code != 20000 in postback | Log warning, skip that task |
+| Malformed input line (no `\|`, empty) | Skip line, log warning |
+| Disk full / write error in writer | Log error, continue (data lost for that entry) |
+| Channel full (backpressure) | Log warning, drop result to avoid blocking HTTP |
 
 ## Data Flow Diagram
 
@@ -206,3 +217,13 @@ input.txt                          DataForSEO
 - `github.com/go-chi/chi/v5` — HTTP router (receiver)
 - `github.com/joho/godotenv` — .env file loading
 - Standard library for everything else
+
+## Logging
+
+Both binaries log to stdout using Go standard `log` package with timestamps. Log levels conveyed by prefix: `[INFO]`, `[WARN]`, `[ERROR]`.
+
+## Known Limitations / Accepted Trade-offs
+
+- **No deduplication**: Output may contain duplicate names if DataForSEO returns the same profile across pagination. This is accepted — dedup can be done in post-processing if needed.
+- **No postback authentication**: The `/postback` endpoint has no auth. Accepted risk for internal/tunneled deployments. If public-facing, add a shared secret token check via query parameter later.
+- **No receiver-side idempotency**: If DataForSEO retries a postback, duplicates will be appended. Accepted for same reason as above.
