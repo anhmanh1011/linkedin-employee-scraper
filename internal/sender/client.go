@@ -41,7 +41,7 @@ func BuildTaskPostBody(entries []models.CompanyEntry, postbackURL string, depth 
 			Depth:        depth,
 			Tag:          e.Domain,
 			PostbackURL:  postbackURL,
-			PostbackData: "advanced",
+			PostbackData: "regular",
 		})
 	}
 	return items

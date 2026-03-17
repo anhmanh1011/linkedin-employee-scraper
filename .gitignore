@@ -3,3 +3,4 @@ data/output.txt
 data/state.json
 *.exe
 *.log
+bin/
