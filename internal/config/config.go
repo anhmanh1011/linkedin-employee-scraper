@@ -3,36 +3,46 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	DfsLogin     string
-	DfsPassword  string
-	PostbackURL  string
-	Depth        int
-	BatchSize    int
-	BatchDelayMs int
+	DfsLogin      string
+	DfsPassword   string
+	PostbackURL   string
+	Depth         int
+	BatchSize     int
+	BatchDelayMs  int
 	MaxConcurrent int
-	RetryCount   int
-	InputFile    string
-	OutputFile   string
-	StateFile    string
-	ReceiverPort string
+	RetryCount    int
+	InputFile     string
+	OutputFile    string
+	StateFile     string
+	RunDir        string
+	ReceiverPort  string
 }
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
+	dataDir := getEnvDefault("DATA_DIR", "data")
+	runDir := filepath.Join(dataDir, "runs", time.Now().Format("2006-01-02_15-04-05"))
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create run directory %s: %w", runDir, err)
+	}
+
 	cfg := &Config{
 		DfsLogin:     os.Getenv("DFS_LOGIN"),
 		DfsPassword:  os.Getenv("DFS_PASSWORD"),
 		PostbackURL:  os.Getenv("POSTBACK_URL"),
-		InputFile:    getEnvDefault("INPUT_FILE", "data/input.txt"),
-		OutputFile:   getEnvDefault("OUTPUT_FILE", "data/output.txt"),
-		StateFile:    getEnvDefault("STATE_FILE", "data/state.json"),
+		InputFile:    getEnvDefault("INPUT_FILE", filepath.Join(dataDir, "input.txt")),
+		OutputFile:   getEnvDefault("OUTPUT_FILE", filepath.Join(runDir, "output.txt")),
+		StateFile:    getEnvDefault("STATE_FILE", filepath.Join(dataDir, "state.json")),
+		RunDir:       runDir,
 		ReceiverPort: getEnvDefault("RECEIVER_PORT", "8080"),
 	}
 
