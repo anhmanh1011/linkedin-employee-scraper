@@ -3,6 +3,7 @@ package sender
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,7 +14,10 @@ import (
 	"linkedin-employee-scraper/internal/models"
 )
 
-const dfsTaskPostURL = "https://api.dataforseo.com/v3/serp/google/organic/task_post"
+// ErrInsufficientFunds is returned when the DataForSEO account has no balance.
+var ErrInsufficientFunds = errors.New("insufficient funds")
+
+const DfsTaskPostURL = "https://api.dataforseo.com/v3/serp/google/organic/task_post"
 
 type Client struct {
 	login      string
@@ -35,7 +39,7 @@ func BuildTaskPostBody(entries []models.CompanyEntry, postbackURL string, depth 
 	items := make([]models.DfsTaskPostItem, 0, len(entries))
 	for _, e := range entries {
 		items = append(items, models.DfsTaskPostItem{
-			Keyword:      fmt.Sprintf(`site:linkedin.com/in "%s"`, e.Company),
+			Keyword:      fmt.Sprintf(`"linkedin.com/in/" "%s"`, e.Company),
 			LocationCode: 2840,
 			LanguageCode: "en",
 			Depth:        depth,
@@ -66,6 +70,9 @@ func (c *Client) SendBatch(items []models.DfsTaskPostItem) (*models.DfsTaskPostR
 
 		resp, err := c.doRequest(body)
 		if err != nil {
+			if errors.Is(err, ErrInsufficientFunds) {
+				return nil, err
+			}
 			lastErr = err
 			log.Printf("[WARN] Batch send attempt %d failed: %v", attempt+1, err)
 			continue
@@ -77,7 +84,7 @@ func (c *Client) SendBatch(items []models.DfsTaskPostItem) (*models.DfsTaskPostR
 }
 
 func (c *Client) doRequest(body []byte) (*models.DfsTaskPostResponse, error) {
-	req, err := http.NewRequest("POST", dfsTaskPostURL, bytes.NewReader(body))
+	req, err := http.NewRequest("POST", DfsTaskPostURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -103,6 +110,10 @@ func (c *Client) doRequest(body []byte) (*models.DfsTaskPostResponse, error) {
 	var result models.DfsTaskPostResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("unmarshal response: %w", err)
+	}
+
+	if result.StatusCode == 40202 {
+		return nil, fmt.Errorf("%w: %s", ErrInsufficientFunds, result.StatusMessage)
 	}
 
 	if result.StatusCode != 20000 {

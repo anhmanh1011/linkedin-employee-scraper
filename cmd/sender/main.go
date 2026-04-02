@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"log"
 	"os"
 	"strings"
@@ -48,12 +50,20 @@ func main() {
 	batches := makeBatches(entries, cfg.BatchSize)
 	log.Printf("[INFO] Split into %d batches of max %d tasks", len(batches), cfg.BatchSize)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	sem := make(chan struct{}, cfg.MaxConcurrent)
 	var wg sync.WaitGroup
 	var successCount atomic.Int64
 	var failCount atomic.Int64
 
 	for i, batch := range batches {
+		if ctx.Err() != nil {
+			log.Printf("[INFO] Stopping: context cancelled, skipping remaining batches")
+			break
+		}
+
 		wg.Add(1)
 		sem <- struct{}{}
 
@@ -61,11 +71,20 @@ func main() {
 			defer wg.Done()
 			defer func() { <-sem }()
 
+			if ctx.Err() != nil {
+				return
+			}
+
 			log.Printf("[INFO] Sending batch %d/%d (%d tasks)", batchIdx+1, len(batches), len(entries))
 
 			items := sender.BuildTaskPostBody(entries, cfg.PostbackURL, cfg.Depth)
 			resp, err := client.SendBatch(items)
 			if err != nil {
+				if errors.Is(err, sender.ErrInsufficientFunds) {
+					log.Printf("[FATAL] Insufficient funds! Stopping all batches.")
+					cancel()
+					return
+				}
 				log.Printf("[ERROR] Batch %d failed: %v", batchIdx+1, err)
 				failCount.Add(int64(len(entries)))
 				return

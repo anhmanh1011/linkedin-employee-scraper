@@ -18,14 +18,16 @@ type DfsTaskPostItem struct {
 }
 
 type DfsTaskPostResponse struct {
-	StatusCode    int    `json:"status_code"`
-	StatusMessage string `json:"status_message"`
-	TasksCount    int    `json:"tasks_count"`
-	TasksError    int    `json:"tasks_error"`
+	StatusCode    int     `json:"status_code"`
+	StatusMessage string  `json:"status_message"`
+	Cost          float64 `json:"cost"`
+	TasksCount    int     `json:"tasks_count"`
+	TasksError    int     `json:"tasks_error"`
 	Tasks         []struct {
-		ID            string `json:"id"`
-		StatusCode    int    `json:"status_code"`
-		StatusMessage string `json:"status_message"`
+		ID            string  `json:"id"`
+		StatusCode    int     `json:"status_code"`
+		StatusMessage string  `json:"status_message"`
+		Cost          float64 `json:"cost"`
 	} `json:"tasks"`
 }
 
